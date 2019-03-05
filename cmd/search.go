@@ -10,13 +10,14 @@ import (
 )
 
 const (
-	crossFactor      = 0.3
-	mutateFactor     = 0.1
-	gridWidth        = 5
-	gridHeight       = 3
-	iterationTimeMax = 500
-	iterationTimeMin = 50
-	iterationFactor  = 20
+	crossFactor        = 0.3
+	mutateFactor       = 0.2
+	gridWidth          = 5
+	gridHeight         = 3
+	iterationTimeMax   = 2000
+	iterationTimeMin   = 50
+	iterationFactor    = 100
+	processTimeSeconds = 2
 )
 
 func main() {
@@ -55,10 +56,11 @@ func runSearch(ctx *cli.Context) {
 		{{1, 0}, {2, 1}, {2, 2}, {2, 3}, {1, 4}},
 		{{1, 0}, {0, 1}, {0, 2}, {0, 3}, {1, 4}},
 	}
-	var populationNum = 50
-	var bestScore float64 = 0
+	var populationNum = 500
+	var bestFit float64 = 0
 	var bestImage [][]byte
 	var bestLine []int32
+
 	var cur = initPopulation(populationNum, gridWidth, gridHeight, alphas)
 	var iterationNum = 0
 	var convergenceNum = 0
@@ -67,19 +69,35 @@ func runSearch(ctx *cli.Context) {
 	var genBest float64
 	var genBestImage [][]byte
 	var genLine []int32
-	fitness, genBest, genBestImage, genLine = calcImagesFitness(cur, lines, scoreTable, sum)
+	var bestScore int32
+	fitness, genBest, genBestImage, genLine, bestScore = calcImagesFitness(cur, lines, scoreTable, sum)
+	var startTime = time.Now()
 	for !stop {
+		if iterationNum > iterationTimeMin && convergenceNum > iterationFactor {
+			cur = initPopulation(populationNum, gridWidth, gridHeight, alphas)
+			convergenceNum = 0
+		}
 		var toCross = selectImages(50, cur, fitness)
 		var crossed = crossMatch(toCross, lines, scoreTable, sum)
-		mutate(crossed, alphas)
-		cur = crossed
-		fitness, genBest, genBestImage, genLine = calcImagesFitness(cur, lines, scoreTable, sum)
-		if genBest > bestScore {
-			bestScore = genBest
+		fitness, genBest, genBestImage, genLine, bestScore = calcImagesFitness(cur, lines, scoreTable, sum)
+		if genBest > bestFit {
+			bestFit = genBest
 			bestImage = genBestImage
 			bestLine = genLine
 			convergenceNum = 0
-			println("best:",bestScore)
+			println("best:", bestFit)
+		} else {
+			convergenceNum += 1
+		}
+		mutate(crossed, alphas)
+		cur = crossed
+		fitness, genBest, genBestImage, genLine, bestScore = calcImagesFitness(cur, lines, scoreTable, sum)
+		if genBest > bestFit {
+			bestFit = genBest
+			bestImage = genBestImage
+			bestLine = genLine
+			convergenceNum = 0
+			println("best:", bestFit, " score:", bestScore)
 		} else {
 			convergenceNum += 1
 		}
@@ -88,6 +106,10 @@ func runSearch(ctx *cli.Context) {
 			stop = true
 		}
 		if genBest == 1 {
+			stop = true
+		}
+		var n = time.Now()
+		if n.Sub(startTime).Seconds() > processTimeSeconds {
 			stop = true
 		}
 	}
@@ -100,7 +122,7 @@ func runSearch(ctx *cli.Context) {
 		print(";")
 	}
 	print("\n")
-	println("best score:", bestScore)
+	println("best score:", bestFit)
 	println("best line")
 	for _, l := range bestLine {
 		print(l)
@@ -142,10 +164,10 @@ func crossMatch(images [][][]byte, lines [][][]int, scoreTable [][]int32, des in
 				}
 			}
 		}
-		var leftFitness, _ = calcImageFitness(left, lines, scoreTable, des)
-		var leftChildFitness, _ = calcImageFitness(leftChild, lines, scoreTable, des)
-		var rightFitness, _ = calcImageFitness(right, lines, scoreTable, des)
-		var rightChildFitness, _ = calcImageFitness(rightChild, lines, scoreTable, des)
+		var leftFitness, _, _ = calcImageFitness(left, lines, scoreTable, des)
+		var leftChildFitness, _, _ = calcImageFitness(leftChild, lines, scoreTable, des)
+		var rightFitness, _, _ = calcImageFitness(right, lines, scoreTable, des)
+		var rightChildFitness, _, _ = calcImageFitness(rightChild, lines, scoreTable, des)
 		if leftFitness > leftChildFitness {
 			result = append(result, left)
 		} else {
@@ -184,7 +206,7 @@ func selectImages(n int, images [][][]byte, fitness []float64) [][][]byte {
 	return selected
 }
 
-func calcImageFitness(image [][]byte, lines [][][]int, scoreTable [][]int32, des int32) (float64, []int32) {
+func calcImageFitness(image [][]byte, lines [][][]int, scoreTable [][]int32, des int32) (float64, []int32, int32) {
 	var scores = make([]int32, 0, len(lines))
 	for i := 0; i < len(lines); i++ {
 		var l = lines[i]
@@ -226,7 +248,7 @@ func calcImageFitness(image [][]byte, lines [][][]int, scoreTable [][]int32, des
 	} else {
 		f = float64(des) / float64(bestScore)
 	}
-	return f, bestLine
+	return f, bestLine, bestScore
 }
 
 func mutate(images [][][]byte, alphas []byte) {
@@ -241,16 +263,17 @@ func mutate(images [][][]byte, alphas []byte) {
 	}
 }
 
-func calcImagesFitness(alphaImages [][][]byte, lines [][][]int, scoreTable [][]int32, des int32) ([]float64, float64, [][]byte, []int32) {
+func calcImagesFitness(alphaImages [][][]byte, lines [][][]int, scoreTable [][]int32, des int32) ([]float64, float64, [][]byte, []int32, int32) {
 	var fitness = make([]float64, len(alphaImages))
 	var bestFitness float64 = 0
 	var bestLine []int32
 	var bestImage = make([][]byte, gridHeight)
+	var bestScore int32
 	for idx := range bestImage {
 		bestImage[idx] = make([]byte, gridWidth)
 	}
 	for imgIdx, img := range alphaImages {
-		var f, line = calcImageFitness(img, lines, scoreTable, des)
+		var f, line, score = calcImageFitness(img, lines, scoreTable, des)
 		fitness[imgIdx] = f
 		if f > bestFitness {
 			bestFitness = f
@@ -258,9 +281,10 @@ func calcImagesFitness(alphaImages [][][]byte, lines [][][]int, scoreTable [][]i
 				copy(bestImage[idx], l)
 			}
 			bestLine = line
+			bestScore = score
 		}
 	}
-	return fitness, bestFitness, bestImage, bestLine
+	return fitness, bestFitness, bestImage, bestLine, bestScore
 }
 
 func calcBestScore(scores []int32, des int32) (int32, []int32) {
